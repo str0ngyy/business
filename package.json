@@ -8,7 +8,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "notify:setup": "node .claude/hooks/notify-setup.mjs",
+    "notify:test": "node .claude/hooks/notify-setup.mjs --test"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.0",
