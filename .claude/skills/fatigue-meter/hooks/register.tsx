@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, ModelUsage, Register, StateDollar, TurnStepChunk } from 'claude-code'
+import type { Register, StateDollar } from 'claude-code'
 
 import type { Reading } from '../types'
-import { barSegments, footer, formatTokens, measure, report, statusLine, toastText } from './scale'
+import { barSegments, formatTokens, measure, report, statusLine, toastText } from './scale'
 
 const reading = atom({ plugin: 'fatigue-meter', key: 'reading' } as const, null)
 const compactions = atom({ plugin: 'fatigue-meter', key: 'compactions' } as const, 0)
@@ -10,28 +10,6 @@ const announced = atom({ plugin: 'fatigue-meter', key: 'announced' } as const, 0
 
 async function current($: StateDollar) {
   return measure(await read($, reading), await read($, compactions))
-}
-
-/** Input tokens a response was answered over: uncached, cache-written and cache-read together. */
-function inputTokens(usage: ModelUsage): number {
-  return usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens
-}
-
-/**
- * The footer for the answer that just ended, its usage the freshest figure. A
- * failure only drops the line: a hook that throws mid-stream would cut the answer.
- */
-async function footerAfter($: EngineInterface, usage: ModelUsage | null) {
-  try {
-    const { context } = await $.session.usage()
-    const tokens = usage === null ? context.tokens : inputTokens(usage)
-    const latest: Reading = { tokens, window: context.window }
-    await update($, reading, () => latest)
-
-    return footer(await current($))
-  } catch {
-    return undefined
-  }
 }
 
 export const register: Register = on => {
@@ -95,46 +73,6 @@ export const register: Register = on => {
     }
 
     return next(e)
-  })
-
-  // Where no surface draws the band (a cloud session the Claude app follows, which
-  // shows only the transcript), the scale rides at the end of the final answer.
-  // Engine chunks after a text piece are held until the next chunk says whether
-  // the answer ends there, so the line lands inside that last text block.
-  on('turn.step', async function* ($, e, next) {
-    const isMain = e.agentId === undefined
-    const isDrawn = (await $.session.surfaces()).length > 0
-    const stream = next(e)
-
-    if (!isMain || isDrawn) {
-      return yield* stream
-    }
-
-    let lastText: number | undefined
-    let held: TurnStepChunk[] = []
-
-    for await (const chunk of stream) {
-      if (chunk.kind === 'engine' && lastText !== undefined) {
-        held.push(chunk)
-        continue
-      }
-
-      if (chunk.kind === 'stop' && chunk.stopReason === 'end_turn' && lastText !== undefined) {
-        const line = await footerAfter($, chunk.usage)
-        if (line !== undefined) {
-          yield { kind: 'text', index: lastText, text: line }
-        }
-      }
-
-      yield* held
-      held = []
-      lastText = chunk.kind === 'text' ? chunk.index : chunk.kind === 'engine' ? lastText : undefined
-      yield chunk
-    }
-
-    yield* held
-
-    return await stream.result
   })
 
   on('command.run', { command: 'fatigue' }, async $ => ({ text: report(await current($)) }))
