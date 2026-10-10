@@ -213,6 +213,7 @@ function commandStatus() {
   print(`Каналы:          ${providers.length ? providers.join(', ') : 'не настроены'}`);
   if (config.telegram.token) print(`  Telegram:      бот ${mask(config.telegram.token)}, чат ${config.telegram.chatId || '—'}`);
   if (config.ntfy.topic) print(`  ntfy:          ${config.ntfy.server}/${config.ntfy.topic}`);
+  print(`Обращение:       ${config.name || 'без имени'}`);
   print(`Порог:           задачи дольше ${config.minSeconds} с`);
   print(`Пересказ ответа: ${config.includeSummary ? 'да' : 'нет'}`);
   print(`Выключено:       ${config.disabled ? 'да (CLAUDE_NOTIFY_DISABLED)' : 'нет'}`);
@@ -392,6 +393,9 @@ async function commandWizard() {
     } else {
       for (const key of TELEGRAM_KEYS) updates[key] = '';
     }
+
+    const name = await ask('\nКак к вам обращаться в уведомлениях', defaults.name);
+    updates.CLAUDE_NOTIFY_NAME = name;
 
     print('\nКороткие задачи обычно делаются, пока вы у компьютера, — о них не пишу.');
     let minSeconds = '';

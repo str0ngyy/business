@@ -4,9 +4,9 @@
  *
  * События:
  *   UserPromptSubmit — запоминает, когда началась задача (ничего не отправляет);
- *   Stop             — «Готово», если задача шла дольше порога;
- *   Notification     — «Нужно решение»: запрос разрешения или вопрос посреди задачи;
- *   StopFailure      — «Остановился с ошибкой»: лимит использования, сбой API.
+ *   Stop             — «Владимир, работа закончена», если задача шла дольше порога;
+ *   Notification     — «нужно твоё решение»: запрос разрешения или вопрос посреди задачи;
+ *   StopFailure      — «работа остановилась»: лимит использования, сбой API.
  *
  * Каналы: приложение ntfy и/или Telegram-бот. Настройки берутся из переменных окружения,
  * а если их нет — из ~/.claude/notify.env (его создаёт мастер notify-setup.mjs).
@@ -36,6 +36,8 @@ const LOG_MAX_BYTES = 256 * 1024;
 const SUMMARY_MAX_CHARS = 320;
 const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
 const DEFAULT_MIN_SECONDS = 60;
+/** Обращение в уведомлениях. Меняется через CLAUDE_NOTIFY_NAME; пустое — без обращения. */
+const DEFAULT_NAME = 'Владимир';
 
 let debugEnabled = false;
 
@@ -65,7 +67,6 @@ export function readEnvFile(file = CONFIG_FILE) {
 }
 
 const isOn = (value) => /^(1|true|yes|on)$/i.test(value);
-const isOff = (value) => /^(0|false|no|off)$/i.test(value);
 
 /** Переменные окружения важнее файла: так удобно настраивать облачные сессии. */
 export function loadConfig(env = process.env) {
@@ -77,7 +78,8 @@ export function loadConfig(env = process.env) {
     disabled: isOn(get('CLAUDE_NOTIFY_DISABLED')),
     debug: isOn(get('CLAUDE_NOTIFY_DEBUG')),
     minSeconds: Number.isFinite(minSeconds) && minSeconds >= 0 ? minSeconds : DEFAULT_MIN_SECONDS,
-    includeSummary: !isOff(get('CLAUDE_NOTIFY_INCLUDE_SUMMARY')),
+    name: env.CLAUDE_NOTIFY_NAME ?? file.CLAUDE_NOTIFY_NAME ?? DEFAULT_NAME,
+    includeSummary: isOn(get('CLAUDE_NOTIFY_INCLUDE_SUMMARY')),
     telegram: {
       token: get('CLAUDE_NOTIFY_TELEGRAM_TOKEN'),
       chatId: get('CLAUDE_NOTIFY_TELEGRAM_CHAT_ID'),
@@ -132,8 +134,8 @@ export async function sendTest(config = loadConfig()) {
     emoji: '🔔',
     tag: 'bell',
     priority: 3,
-    title: 'Тест · уведомления Claude Code',
-    body: 'Всё настроено. Когда Claude закончит задачу или ему понадобится решение, сообщение придёт сюда.',
+    title: addressed(config.name, 'уведомления работают'),
+    body: 'Когда работа закончится, сообщение придёт сюда.',
   });
 }
 
@@ -477,9 +479,10 @@ function describeFailure(input) {
   return details || 'Задача прервалась из-за ошибки API.';
 }
 
-function projectName(input) {
-  const dir = process.env.CLAUDE_PROJECT_DIR || input.cwd || process.cwd();
-  return path.basename(dir) || dir;
+/** «Владимир, работа закончена» или «Работа закончена», если имя не задано. */
+function addressed(name, text) {
+  const trimmed = String(name || '').trim();
+  return trimmed ? `${trimmed}, ${text}` : text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** В облачной сессии кнопка в уведомлении открывает её на claude.ai. */
@@ -517,21 +520,22 @@ export async function handleHook(input, config = loadConfig()) {
   if (config.disabled) return debug(`skip ${event}: уведомления выключены`);
   if (configuredProviders(config).length === 0) return debug(`skip ${event}: каналы не настроены`);
 
-  const project = projectName(input);
   let notification;
 
   switch (event) {
     case 'Stop': {
       if (!longEnough) return debug(`skip Stop: задача заняла ${formatDuration(elapsedMs)}`);
       if (!claimOnce(lockKey('done'), DAY_MS)) return debug('skip Stop: уже отправлено');
-      const summary = config.includeSummary ? summarize(lastAssistantText(input)) : '';
+      const details = config.includeSummary
+        ? [elapsedMs !== null ? `Заняло ${formatDuration(elapsedMs)}` : '', summarize(lastAssistantText(input))]
+        : [];
       notification = {
         kind: 'done',
         emoji: '✅',
         tag: 'white_check_mark',
         priority: 3,
-        title: `Готово · ${project}`,
-        body: [elapsedMs !== null ? `Заняло ${formatDuration(elapsedMs)}` : '', summary].filter(Boolean).join('\n\n'),
+        title: addressed(config.name, 'работа закончена'),
+        body: details.filter(Boolean).join('\n\n') || 'Можно давать новое задание.',
       };
       break;
     }
@@ -550,7 +554,7 @@ export async function handleHook(input, config = loadConfig()) {
         emoji: '✋',
         tag: 'raised_hand',
         priority: 4,
-        title: `Нужно решение · ${project}`,
+        title: addressed(config.name, 'нужно твоё решение'),
         body: describeInputRequest(message),
       };
       break;
@@ -563,7 +567,7 @@ export async function handleHook(input, config = loadConfig()) {
         emoji: '❌',
         tag: 'x',
         priority: 4,
-        title: `Остановился с ошибкой · ${project}`,
+        title: addressed(config.name, 'работа остановилась'),
         body: describeFailure(input),
       };
       break;
