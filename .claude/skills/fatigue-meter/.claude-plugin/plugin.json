@@ -1,6 +1,6 @@
 {
   "name": "fatigue-meter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Цветная шкала «усталости» Claude: насколько заполнен контекст и когда пора открыть новый чат.",
   "author": {
     "name": "Vladimir"

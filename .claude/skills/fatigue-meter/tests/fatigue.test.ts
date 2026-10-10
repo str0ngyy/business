@@ -1,7 +1,7 @@
-import type { On } from 'claude-code'
+import type { On, RenderSurface, TurnStepChunk, TurnStepResult } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
-import { barSegments, measure, report, statusLine, ZONES } from '../hooks/scale'
+import { barSegments, footer, measure, report, squares, statusLine, ZONES } from '../hooks/scale'
 
 const BAND = {
   plugin: 'fatigue-meter',
@@ -150,5 +150,106 @@ describe('alerts', () => {
     await $.session.measure(measured(170_000))
     expect(seen.toasts[2]).toMatch(/🔴 Пора в новый чат/)
     expect(seen.status).toMatch(/🔴/)
+  })
+})
+
+const USAGE = {
+  model: 'claude-test',
+  input_tokens: 2,
+  output_tokens: 300,
+  cache_creation_input_tokens: 4_998,
+  cache_read_input_tokens: 85_000,
+}
+
+const STEP = { turnId: 't1', index: 0, model: 'claude-test', messageCount: 3 }
+
+/**
+ * The engine beneath the plugin for one model request: its chunks, then its result.
+ * A stand-in yields only the modeled kinds; engine chunks come from the real engine alone.
+ */
+function response(on: On, chunks: TurnStepChunk[], surfaces: RenderSurface[] = []) {
+  on('session.surfaces', () => ({ value: surfaces }))
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { tokens: 10_000, window: 200_000, percent: 5 }, rateLimits: [] },
+  }))
+  on('turn.step', async function* ($, e) {
+    for (const chunk of chunks) yield chunk
+    const result: TurnStepResult = {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      stopReason: 'end_turn',
+      usage: USAGE,
+    }
+
+    return result
+  })
+}
+
+async function drain(stream: AsyncGenerator<TurnStepChunk, TurnStepResult>) {
+  const seen: TurnStepChunk[] = []
+  for await (const chunk of stream) seen.push(chunk)
+
+  return seen
+}
+
+const FINAL: TurnStepChunk[] = [
+  { kind: 'text', index: 0, text: 'Готово, ' },
+  { kind: 'text', index: 0, text: 'всё работает.' },
+  { kind: 'stop', stopReason: 'end_turn', usage: USAGE },
+]
+
+describe('reply footer', () => {
+  test('the final answer ends with the scale, inside its own text block', async ($, on) => {
+    response(on, FINAL)
+    const seen = await drain($.turn.step(STEP))
+
+    const expected = footer(measure({ tokens: 90_000, window: 200_000 }, 0))
+    expect(expected).toMatch(/🟩🟩🟩🟩🟨⬜⬜⬜⬜⬜ \*\*Усталость 45% · Бодрый\*\*/)
+    expect(seen).toEqual([FINAL[0], FINAL[1], { kind: 'text', index: 0, text: expected }, FINAL[2]])
+  })
+
+  test('a response that goes on to call a tool passes through untouched', async ($, on) => {
+    const chunks: TurnStepChunk[] = [
+      { kind: 'text', index: 0, text: 'Сейчас проверю.' },
+      { kind: 'tool', index: 1, id: 'toolu_1', name: 'Bash' },
+      { kind: 'input', index: 1, json: '{}' },
+      { kind: 'stop', stopReason: 'tool_use', usage: USAGE },
+    ]
+    response(on, chunks)
+
+    expect(await drain($.turn.step(STEP))).toEqual(chunks)
+  })
+
+  test('thinking first, then the answer: the footer follows the answer', async ($, on) => {
+    const chunks: TurnStepChunk[] = [
+      { kind: 'thinking', index: 0, text: 'хм' },
+      { kind: 'text', index: 1, text: 'Ответ.' },
+      { kind: 'stop', stopReason: 'end_turn', usage: USAGE },
+    ]
+    response(on, chunks)
+    const seen = await drain($.turn.step(STEP))
+
+    expect(seen.length).toBe(chunks.length + 1)
+    expect(seen[2]).toMatchObject({ kind: 'text', index: 1 })
+    expect(seen[3]).toEqual(chunks[2])
+  })
+
+  test('where a surface draws the band, the answer is left as it came', async ($, on) => {
+    response(on, FINAL, ['desktop'])
+
+    expect(await drain($.turn.step(STEP))).toEqual(FINAL)
+  })
+
+  test("a subagent's answer is left as it came", async ($, on) => {
+    response(on, FINAL)
+
+    expect(await drain($.turn.step({ ...STEP, agentId: 'agent_1' }))).toEqual(FINAL)
+  })
+
+  test('the colored squares follow the zones', async () => {
+    expect(squares(0)).toBe('⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜')
+    expect(squares(100)).toBe('🟩🟩🟩🟩🟨🟨🟧🟧🟥🟥')
   })
 })
