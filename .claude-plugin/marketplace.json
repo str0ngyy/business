@@ -1,0 +1,14 @@
+{
+  "name": "business-mods",
+  "description": "Моды Claude Code из проекта business",
+  "owner": {
+    "name": "Vladimir"
+  },
+  "plugins": [
+    {
+      "name": "fatigue-meter",
+      "source": "./.claude/skills/fatigue-meter",
+      "description": "Цветная шкала «усталости» Claude: когда пора открыть новый чат."
+    }
+  ]
+}
