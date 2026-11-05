@@ -93,26 +93,11 @@ export function measure(reading: Reading | null, compactions: number): Fatigue {
   return { percent, level, zone, advice, tokens, budget, compactions }
 }
 
-export type Segment = { text: string; color?: string }
-
-/** The bar as runs of one color: filled cells take the color of the zone they sit in. */
-export function barSegments(percent: number, cells: number): Segment[] {
+/** The slim line under the prompt: filled and empty parts, ten cells by default. */
+export function slimBar(percent: number, cells = 10): { filled: string; empty: string } {
   const filled = Math.round((percent / 100) * cells)
-  const runs: Segment[] = []
 
-  for (let i = 0; i < cells; i += 1) {
-    const color = i < filled ? ZONES[zoneIndexAt(((i + 0.5) / cells) * 100)]!.color : undefined
-    const glyph = i < filled ? '█' : '░'
-    const last = runs[runs.length - 1]
-
-    if (last && last.color === color) {
-      last.text += glyph
-    } else {
-      runs.push({ text: glyph, color })
-    }
-  }
-
-  return runs
+  return { filled: '━'.repeat(filled), empty: '─'.repeat(cells - filled) }
 }
 
 /** The bar in colored squares, for a place that draws only text. */
@@ -132,12 +117,6 @@ export function formatTokens(tokens: number): string {
   if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`
 
   return String(tokens)
-}
-
-export function statusLine(fatigue: Fatigue): string | undefined {
-  if (fatigue.level < TIRED) return undefined
-
-  return `${fatigue.zone.emoji} Усталость ${fatigue.percent}% — ${fatigue.advice}`
 }
 
 export function toastText(fatigue: Fatigue): string {

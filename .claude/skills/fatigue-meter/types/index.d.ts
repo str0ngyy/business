@@ -12,6 +12,8 @@ declare module 'claude-code' {
       compactions: number
       /** Index of the zone last announced, so a toast fires once per step up. */
       announced: number
+      /** The person closed the line under the prompt in this chat (× or /fatigue off). */
+      isHidden: boolean
     }
   }
 }

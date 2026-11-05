@@ -2,11 +2,12 @@ import { atom, read, update } from 'claude-code'
 import type { Register, StateDollar } from 'claude-code'
 
 import type { Reading } from '../types'
-import { barSegments, formatTokens, measure, report, statusLine, toastText } from './scale'
+import { measure, report, slimBar, toastText } from './scale'
 
 const reading = atom({ plugin: 'fatigue-meter', key: 'reading' } as const, null)
 const compactions = atom({ plugin: 'fatigue-meter', key: 'compactions' } as const, 0)
 const announced = atom({ plugin: 'fatigue-meter', key: 'announced' } as const, 0)
+const isHidden = atom({ plugin: 'fatigue-meter', key: 'isHidden' } as const, false)
 
 async function current($: StateDollar) {
   return measure(await read($, reading), await read($, compactions))
@@ -16,7 +17,8 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'fatigue',
-      description: 'Шкала усталости Claude: заполненность контекста и когда открыть новый чат',
+      description: 'Шкала усталости Claude: отчёт; off — скрыть строку под полем ввода, on — вернуть',
+      argumentHint: '[on|off]',
       immediate: true,
     })
 
@@ -30,7 +32,8 @@ export const register: Register = on => {
       // No figures yet: the first measurement fills them in.
     }
 
-    $.ui.status(statusLine(await current($)))
+    // Versions before 0.4 pinned a status line; a chat that updates in place drops it.
+    $.ui.status(undefined)
 
     return next(e)
   })
@@ -42,11 +45,10 @@ export const register: Register = on => {
 
       const fatigue = await current($)
       const before = await read($, announced)
-      if (fatigue.level > before) {
+      if (fatigue.level > before && !(await read($, isHidden))) {
         $.ui.toast(toastText(fatigue), { timeoutMs: 10_000 })
       }
       await update($, announced, () => fatigue.level)
-      $.ui.status(statusLine(fatigue))
     }
 
     return next(e)
@@ -58,7 +60,6 @@ export const register: Register = on => {
 
     if (e.agentId === undefined && e.trigger !== 'precompute' && !isSkipped) {
       await update($, compactions, n => (n ?? 0) + 1)
-      $.ui.status(statusLine(await current($)))
     }
 
     return result
@@ -69,52 +70,63 @@ export const register: Register = on => {
       await update($, reading, () => null)
       await update($, compactions, () => 0)
       await update($, announced, () => 0)
-      $.ui.status(undefined)
     }
 
     return next(e)
   })
 
-  on('command.run', { command: 'fatigue' }, async $ => ({ text: report(await current($)) }))
+  on('command.run', { command: 'fatigue' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase()
 
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) {
-      return next(e)
+    if (arg === 'off') {
+      await update($, isHidden, () => true)
+
+      return { text: 'Шкала под полем ввода скрыта в этом чате. Вернуть: /fatigue on' }
     }
 
-    const { Box, Text } = $.ui.resolve(e)
+    if (arg === 'on') {
+      await update($, isHidden, () => false)
+
+      return { text: 'Шкала под полем ввода снова видна в этом чате.' }
+    }
+
+    const hiddenNote = (await read($, isHidden)) ? '\n\nСтрока под полем ввода скрыта. Вернуть: /fatigue on' : ''
+
+    return { text: report(await current($)) + hiddenNote }
+  })
+
+  // The slim line sits at the right of the hint line under the prompt; the
+  // engine's own hint stays where it was, on the left.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    const engineLine = await next(e)
+
+    if (await read($, isHidden)) {
+      return engineLine
+    }
+
+    const { Box, Button, Text } = $.ui.resolve(e)
     const fatigue = await current($)
-    const { zone } = fatigue
-    const columns = e.props.bodyColumns
-    const showTokens = columns >= 72
-    const label = `${zone.emoji} ${zone.title}  `
-    const used = label.length + 7 + (showTokens ? 34 : 0)
-    const cells = Math.max(10, Math.min(24, columns - used))
-    const compacted = fatigue.compactions > 0 ? ` · сжатий: ${fatigue.compactions}` : ''
+    const { filled, empty } = slimBar(fatigue.percent)
+    const isRoomy = (e.viewport?.columns ?? 80) >= 60
 
     return (
-      <Box flexDirection="column">
-        <Box>
-          <Text color={zone.color} bold>
-            {label}
-          </Text>
-          {barSegments(fatigue.percent, cells).map(run =>
-            run.color === undefined ? (
-              <Text dimColor>{run.text}</Text>
-            ) : (
-              <Text color={run.color}>{run.text}</Text>
-            ),
-          )}
-          <Text bold>{`  ${fatigue.percent}%`}</Text>
-          {showTokens && (
-            <Text dimColor>
-              {`  · ${formatTokens(fatigue.tokens)} / ${formatTokens(fatigue.budget)} токенов${compacted}`}
-            </Text>
-          )}
+      <Box justifyContent="space-between">
+        <Box flexGrow={1}>{engineLine}</Box>
+        <Box key="fatigue" columnGap={1}>
+          {isRoomy && <Text dimColor>усталость</Text>}
+          <Box>
+            <Text color={fatigue.zone.color}>{filled}</Text>
+            <Text dimColor>{empty}</Text>
+          </Box>
+          <Text color={fatigue.zone.color}>{`${fatigue.percent}%`}</Text>
+          <Button
+            key="hide"
+            role="dismiss"
+            plain
+            label="×"
+            onPress={() => update($, isHidden, () => true)}
+          />
         </Box>
-        <Text dimColor wrap="truncate-end">
-          {`Усталость Claude · ${fatigue.advice}`}
-        </Text>
       </Box>
     )
   })
